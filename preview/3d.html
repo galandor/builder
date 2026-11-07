@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Строим дом</title>
+  <style>
+    :root { --ink: #243044; --sky: #79c7f5; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; background: var(--sky); color: var(--ink); }
+    html { touch-action: none; }
+    body {
+      font-family: "Arial Rounded MT Bold", "Trebuchet MS", "Segoe UI", sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #view { display: block; width: 100%; height: 100%; touch-action: none; }
+    [hidden] { display: none !important; }
+    #hud { position: fixed; inset: 0; pointer-events: none; }
+    .banner, .prompt, .finale, #bubble {
+      pointer-events: auto;
+      background: #fff;
+      border: 4px solid var(--ink);
+      border-radius: 18px;
+    }
+    .banner {
+      position: absolute;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      padding: 10px 22px 12px;
+    }
+    .banner h1, .banner p { margin: 0; }
+    .banner h1 { font-size: clamp(28px, 5vw, 52px); }
+    .banner p { margin-top: 6px; font-size: clamp(18px, 3vw, 32px); font-weight: 800; }
+    .prompt {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px 8px 16px;
+    }
+    .prompt p {
+      flex: 1;
+      margin: 0;
+      font-size: clamp(18px, 2.5vw, 32px);
+      font-weight: 800;
+      line-height: 1.25;
+    }
+    #again {
+      width: 64px;
+      height: 64px;
+      border: 4px solid var(--ink);
+      border-radius: 50%;
+      background: #ffe14a;
+      padding: 0;
+      cursor: pointer;
+    }
+    #again svg { width: 36px; height: 36px; display: block; margin: 0 auto; }
+    .finale {
+      position: absolute;
+      left: 50%;
+      top: 16px;
+      transform: translateX(-50%);
+      text-align: center;
+      padding: 18px 24px;
+    }
+    .finale p { margin: 0 0 12px; font-size: clamp(32px, 5vw, 56px); font-weight: 800; }
+    #replay {
+      border: 4px solid var(--ink);
+      border-radius: 16px;
+      background: #ffe14a;
+      padding: 12px 22px;
+      font-size: clamp(22px, 4vw, 36px);
+      font-weight: 800;
+      cursor: pointer;
+    }
+    #bubble {
+      position: absolute;
+      margin: 0;
+      padding: 8px 14px;
+      font-size: clamp(20px, 3vw, 32px);
+      font-weight: 800;
+      transform: translate(-50%, -120%);
+    }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="hud">
+    <div class="banner" id="pick-ui">
+      <h1>Строим дом</h1>
+      <p>Какой дом построим?</p>
+    </div>
+    <div class="prompt" id="play-ui" hidden>
+      <p id="question" aria-live="polite"></p>
+      <button id="again" type="button" aria-label="Повторить вопрос">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="6" y="16" width="12" height="16" fill="#243044"/>
+          <polygon points="18,16 34,6 34,42 18,32" fill="#243044"/>
+          <path d="M38 16 Q46 24 38 32" fill="none" stroke="#243044" stroke-width="4" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="finale" id="finale" hidden>
+      <p>Дом готов!</p>
+      <button id="replay" type="button">Построить ещё</button>
+    </div>
+    <p id="bubble" hidden>Я так не умею</p>
+  </div>
+  <script type="module">
+    import * as THREE from "three";
+
+    const INK = 0x243044;
+    const STAGES = [
+      { id: "clear", vehicle: "bulldozer", prompt: "Как думаешь, какую машинку надо использовать, чтобы расчистить площадку?" },
+      { id: "haul", vehicle: "dump", prompt: "Какой машинкой увезём мусор?" },
+      { id: "pour", vehicle: "mixer", prompt: "Кто привезёт бетон и зальёт фундамент?" },
+      { id: "materials", vehicle: "dump", prompt: "Какая машинка привезёт кирпичи, окна и двери?" },
+      { id: "roofBring", vehicle: "dump", prompt: "Кто привезёт крышу?" },
+      { id: "roofPlace", vehicle: "crane", prompt: "Какая машинка поставит крышу на дом?" },
+      { id: "dig", vehicle: "excavator", prompt: "Кто выкопает траншею для труб?" },
+      { id: "pipesBring", vehicle: "dump", prompt: "Кто привезёт трубы?" },
+      { id: "pipesLay", vehicle: "crane", prompt: "Какая машинка положит трубы?" },
+      { id: "pave", vehicle: "roller", prompt: "Кто закатает дорожку асфальтом?" }
+    ];
+    const HOUSES = {
+      sun: { wall: 0xffd84a, roof: 0xe23b3b },
+      sky: { wall: 0x8ec9f0, roof: 0x8a5a32 },
+      berry: { wall: 0xffb3d1, roof: 0x3d6fe0 }
+    };
+
+    const pickUi = document.getElementById("pick-ui");
+    const playUi = document.getElementById("play-ui");
+    const question = document.getElementById("question");
+    const finale = document.getElementById("finale");
+    const bubble = document.getElementById("bubble");
+    const canvas = document.getElementById("view");
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x79c7f5);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 80);
+    const look = new THREE.Vector3(0, 1.3, 0);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    const hemi = new THREE.HemisphereLight(0xfff6df, 0x74a85a, 1.05);
+    scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.45);
+    sun.position.set(8, 14, 9);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -14;
+    sun.shadow.camera.right = 14;
+    sun.shadow.camera.top = 14;
+    sun.shadow.camera.bottom = -14;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 40;
+    sun.shadow.bias = -0.00035;
+    scene.add(sun);
+
+    const mats = new Map();
+    const outlineMat = new THREE.MeshBasicMaterial({ color: INK, side: THREE.BackSide });
+    function paint(color) {
+      const key = color >>> 0;
+      if (!mats.has(key)) mats.set(key, new THREE.MeshLambertMaterial({ color: key }));
+      return mats.get(key);
+    }
+    function box(w, h, d, color) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), paint(color));
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      const shell = new THREE.Mesh(mesh.geometry, outlineMat);
+      shell.scale.setScalar(1.045);
+      shell.castShadow = false;
+      shell.receiveShadow = false;
+      mesh.add(shell);
+      return mesh;
+    }
+    function cyl(r, h, color, seg) {
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, seg || 18), paint(color));
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      const shell = new THREE.Mesh(mesh.geometry, outlineMat);
+      shell.scale.setScalar(1.04);
+      shell.castShadow = false;
+      mesh.add(shell);
+      return mesh;
+    }
+    function wheel(r) {
+      const axle = new THREE.Group();
+      const tire = cyl(r, 0.2, 0x2a2e36, 16);
+      tire.rotation.z = Math.PI / 2;
+      const hub = cyl(r * 0.45, 0.22, 0xc5ced6, 12);
+      hub.rotation.z = Math.PI / 2;
+      axle.add(tire, hub);
+      return axle;
+    }
+
+    const grass = new THREE.Mesh(new THREE.CircleGeometry(22, 40), paint(0x62be4e));
+    grass.rotation.x = -Math.PI / 2;
+    grass.receiveShadow = true;
+    scene.add(grass);
+    const sunBall = new THREE.Mesh(new THREE.SphereGeometry(0.7, 20, 16), paint(0xffe14a));
+    sunBall.position.set(7.5, 6.4, -6);
+    scene.add(sunBall);
+    [[-6, 5.2, -5], [4.5, 5.6, -7]].forEach(([x, y, z]) => {
+      const cloud = new THREE.Group();
+      [0.55, 0.4, 0.38].forEach((r, i) => {
+        const p = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 12), paint(0xffffff));
+        p.position.set((i - 1) * 0.45, i === 1 ? 0.15 : 0, 0);
+        cloud.add(p);
+      });
+      cloud.position.set(x, y, z);
+      scene.add(cloud);
+    });
+    function tree(x, z) {
+      const g = new THREE.Group();
+      const trunk = cyl(0.12, 0.7, 0xc47a3a, 8);
+      trunk.position.y = 0.35;
+      const crown = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 12), paint(0x3e9a32));
+      crown.position.y = 1.05;
+      crown.castShadow = true;
+      g.add(trunk, crown);
+      g.position.set(x, 0, z);
+      scene.add(g);
+    }
+    tree(-8.2, 1.2);
+    tree(8.4, 0.4);
+
+    const pickGroup = new THREE.Group();
+    scene.add(pickGroup);
+    const pickHouses = [];
+
+    let site = null;
+    let vehicles = [];
+    let builder = null;
+    let builderHome = new THREE.Vector3(-5.35, 0, 2.7);
+    let mode = "pick";
+    let busy = false;
+    let generation = 0;
+    let stageIndex = 0;
+    let colors = HOUSES.sun;
+
+    const BR = { w: 0.48, h: 0.24, g: 0.035 };
+
+    function makeHouse(wall, roofColor, done) {
+      const house = new THREE.Group();
+      const cols = 6;
+      const rows = 5;
+      const step = BR.w + BR.g;
+      const stepY = BR.h + BR.g;
+      const width = cols * step;
+      const depth = 5 * step;
+      const base = 0.22;
+      const found = new THREE.Group();
+      const slab = box(width + 0.55, 0.22, depth + 0.45, 0xcfd2d6);
+      slab.position.y = 0.11;
+      found.add(slab);
+      if (!done) found.visible = false;
+      house.add(found);
+
+      const bricks = [];
+      function addBrick(x, y, z, sx, sy, sz) {
+        const b = box(sx, sy, sz, wall);
+        b.position.set(x, y, z);
+        if (!done) {
+          b.visible = false;
+          b.scale.setScalar(0.01);
+        }
+        house.add(b);
+        bricks.push(b);
+      }
+      const frontZ = depth / 2 - BR.w / 2;
+      const backZ = -frontZ;
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const door = col >= 2 && col <= 3 && row <= 2;
+          const windowHole = col <= 1 && row >= 3;
+          if (door || windowHole) continue;
+          const x = (col - (cols - 1) / 2) * step;
+          const y = base + BR.h / 2 + row * stepY;
+          addBrick(x, y, frontZ, BR.w, BR.h, BR.w * 0.72);
+          addBrick(x, y, backZ, BR.w, BR.h, BR.w * 0.72);
+        }
+      }
+      for (let row = 0; row < rows; row++) {
+        for (let i = 0; i < 4; i++) {
+          const z = (i - 1.5) * step;
+          const y = base + BR.h / 2 + row * stepY;
+          addBrick(-width / 2 + 0.08, y, z, BR.w * 0.72, BR.h, BR.w);
+          addBrick(width / 2 - 0.08, y, z, BR.w * 0.72, BR.h, BR.w);
+        }
+      }
+
+      const glass = box(0.86, 0.42, 0.08, 0xc8f0ff);
+      glass.position.set(-1.15, base + 3.35 * stepY, frontZ + 0.16);
+      const mullionV = box(0.05, 0.42, 0.05, INK);
+      const mullionH = box(0.86, 0.05, 0.05, INK);
+      mullionV.position.z = 0.04;
+      mullionH.position.z = 0.04;
+      glass.add(mullionV, mullionH);
+      const door = box(0.78, 0.92, 0.1, 0xc47a3a);
+      door.position.set(0.26, base + 0.46, frontZ + 0.16);
+      const knob = box(0.08, 0.08, 0.06, 0xffe14a);
+      knob.position.set(0.24, 0.05, 0.06);
+      door.add(knob);
+      glass.visible = door.visible = !!done;
+      house.add(glass, door);
+
+      const wallTop = base + rows * stepY;
+      const roof = new THREE.Group();
+      const slopeA = box(width + 0.55, 0.1, depth * 0.62, roofColor);
+      slopeA.rotation.x = 0.42;
+      slopeA.position.set(0, 0.34, -depth * 0.16);
+      const slopeB = box(width + 0.55, 0.1, depth * 0.62, roofColor);
+      slopeB.rotation.x = -0.42;
+      slopeB.position.set(0, 0.34, depth * 0.16);
+      const chimney = box(0.28, 0.55, 0.28, 0xc47a3a);
+      chimney.position.set(0.85, 0.55, -0.15);
+      roof.add(slopeA, slopeB, chimney);
+      roof.position.y = wallTop;
+      const seat = roof.position.clone();
+      if (!done) {
+        roof.position.set(1.9, 0.35, 1.35);
+        roof.rotation.set(0.35, 0.5, 0.4);
+        roof.visible = false;
+      }
+      house.add(roof);
+
+      house.userData = { found, bricks, glass, door, roof, seat, frontZ };
+      return house;
+    }
+
+    function showFinished(house) {
+      house.userData.found.scale.y = 1;
+      house.userData.bricks.forEach((b) => { b.visible = true; b.scale.setScalar(1); });
+      house.userData.glass.visible = true;
+      house.userData.door.visible = true;
+      house.userData.roof.visible = true;
+      house.userData.roof.position.copy(house.userData.seat);
+      house.userData.roof.rotation.set(0, 0, 0);
+    }
+
+    ["sun", "sky", "berry"].forEach((id, index) => {
+      const house = makeHouse(HOUSES[id].wall, HOUSES[id].roof, false);
+      showFinished(house);
+      house.scale.setScalar(0.72);
+      house.position.set((index - 1) * 4.3, 0, 0);
+      house.userData.role = "choice";
+      house.userData.id = id;
+      pickGroup.add(house);
+      pickHouses.push(house);
+    });
+
+    function makeBuilder() {
+      const g = new THREE.Group();
+      const legL = box(0.16, 0.38, 0.16, INK);
+      legL.position.set(-0.1, 0.19, 0);
+      const legR = box(0.16, 0.38, 0.16, INK);
+      legR.position.set(0.1, 0.19, 0);
+      const body = box(0.46, 0.42, 0.28, 0x3d7ec9);
+      body.position.y = 0.58;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 14, 12), paint(0xffcc99));
+      head.position.y = 0.96;
+      head.castShadow = true;
+      const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), paint(0xffe14a));
+      helmet.position.y = 1.02;
+      g.add(legL, legR, body, head, helmet);
+      g.userData.legs = [legL, legR];
+      return g;
+    }
+
+    function axleAt(x, y, z, r) {
+      const axle = wheel(r);
+      axle.position.set(x, y, z);
+      return axle;
+    }
+
+    function makeBulldozer() {
+      const g = new THREE.Group();
+      const wheels = [];
+      [-0.5, 0.5].forEach((x) => {
+        const track = box(0.28, 0.34, 1.55, 0x2a2e36);
+        track.position.set(x, 0.18, 0.05);
+        g.add(track);
+        [-0.48, 0.05, 0.55].forEach((z) => {
+          const axle = axleAt(x, 0.16, z, 0.13);
+          g.add(axle);
+          wheels.push(axle);
+        });
+      });
+      const body = box(0.78, 0.36, 1.05, 0xf5c518);
+      body.position.set(0, 0.52, 0.12);
+      const cab = box(0.7, 0.4, 0.52, 0xffe56a);
+      cab.position.set(0, 0.86, 0.28);
+      const glass = box(0.48, 0.2, 0.06, 0xb9e6ff);
+      glass.position.set(0, 0.9, 0.02);
+      const head = box(0.16, 0.16, 0.16, 0xffe14a);
+      head.position.set(0, 0.9, 0.28);
+      head.visible = false;
+      const blade = new THREE.Group();
+      const plate = box(1.28, 0.58, 0.1, 0xdfe6ee);
+      plate.position.y = 0.36;
+      blade.add(plate);
+      blade.position.set(0, 0, -0.92);
+      g.add(body, cab, glass, head, blade);
+      g.userData = { role: "vehicle", id: "bulldozer", wheels, head, blade };
+      return g;
+    }
+
+    function makeExcavator() {
+      const g = new THREE.Group();
+      const wheels = [];
+      const base = box(0.95, 0.28, 1.35, 0x2a2e36);
+      base.position.set(0, 0.22, 0);
+      g.add(base);
+      [-0.42, 0.42].forEach((x) => [-0.42, 0.05, 0.45].forEach((z) => {
+        const axle = axleAt(x, 0.16, z, 0.14);
+        g.add(axle);
+        wheels.push(axle);
+      }));
+      const body = box(0.8, 0.32, 0.85, 0xf0a202);
+      body.position.set(0, 0.5, 0.12);
+      const cab = box(0.62, 0.42, 0.5, 0xffd15c);
+      cab.position.set(0, 0.84, 0.22);
+      const glass = box(0.4, 0.2, 0.06, 0xb9e6ff);
+      glass.position.set(0, 0.88, -0.02);
+      const head = box(0.16, 0.16, 0.16, 0xffe14a);
+      head.position.set(0.12, 0.88, 0.22);
+      head.visible = false;
+      const boom = new THREE.Group();
+      boom.position.set(0.15, 0.7, -0.25);
+      const arm = box(0.14, 0.14, 0.95, 0xf0a202);
+      arm.position.set(0, 0.28, -0.42);
+      arm.rotation.x = 0.55;
+      const stickPivot = new THREE.Group();
+      stickPivot.position.set(0, 0.62, -0.78);
+      const stick = box(0.12, 0.12, 0.7, 0xf6b42a);
+      stick.position.set(0, -0.12, -0.28);
+      const bucket = box(0.42, 0.24, 0.28, 0x6b7280);
+      bucket.position.set(0, -0.32, -0.52);
+      stickPivot.add(stick, bucket);
+      boom.add(arm, stickPivot);
+      g.add(body, cab, glass, head, boom);
+      g.userData = { role: "vehicle", id: "excavator", wheels, head, boom, stick: stickPivot };
+      return g;
+    }
+
+    function makeCrane() {
+      const g = new THREE.Group();
+      const wheels = [];
+      const chassis = box(0.9, 0.28, 1.7, 0x3d7ec9);
+      chassis.position.set(0, 0.36, 0.1);
+      g.add(chassis);
+      [[-0.42, -0.45], [0.42, -0.45], [-0.42, 0.55], [0.42, 0.55]].forEach(([x, z]) => {
+        const axle = axleAt(x, 0.22, z, 0.2);
+        g.add(axle);
+        wheels.push(axle);
+      });
+      const cab = box(0.7, 0.48, 0.55, 0x8ec9f0);
+      cab.position.set(0, 0.72, -0.45);
+      const glass = box(0.46, 0.22, 0.06, 0xe7f7ff);
+      glass.position.set(0, 0.76, -0.72);
+      const head = box(0.16, 0.16, 0.16, 0xffe14a);
+      head.position.set(0.12, 0.78, -0.45);
+      head.visible = false;
+      const boom = new THREE.Group();
+      boom.position.set(0, 0.85, -0.15);
+      const beam = box(0.12, 0.1, 2.15, 0xf2c14e);
+      beam.position.set(0, 0.72, -0.55);
+      beam.rotation.x = 0.62;
+      const line = box(0.03, 0.55, 0.03, INK);
+      line.position.set(0, 0.22, -1.35);
+      const hook = box(0.22, 0.16, 0.16, 0x6b7280);
+      hook.position.set(0, -0.08, -1.35);
+      boom.add(beam, line, hook);
+      g.add(cab, glass, head, boom);
+      g.userData = { role: "vehicle", id: "crane", wheels, head, boom };
+      return g;
+    }
+
+    function makeDump() {
+      const g = new THREE.Group();
+      const wheels = [];
+      [[-0.42, -0.55], [0.42, -0.55], [-0.48, 0.35], [0.48, 0.35], [-0.48, 0.78], [0.48, 0.78]].forEach(([x, z]) => {
+        const axle = axleAt(x, 0.24, z, 0.24);
+        g.add(axle);
+        wheels.push(axle);
+      });
+      const cab = box(0.86, 0.55, 0.7, 0xe36b2c);
+      cab.position.set(0, 0.7, -0.62);
+      const hood = box(0.8, 0.28, 0.4, 0xffb067);
+      hood.position.set(0, 0.95, -0.78);
+      const glass = box(0.55, 0.28, 0.06, 0xb9e6ff);
+      glass.position.set(0, 0.82, -0.96);
+      const head = box(0.16, 0.16, 0.16, 0xffe14a);
+      head.position.set(0.16, 0.82, -0.62);
+      head.visible = false;
+      const bed = new THREE.Group();
+      bed.position.set(0, 0.55, 0.95);
+      const pan = box(1.05, 0.42, 1.35, 0xf28c28);
+      pan.position.set(0, 0.2, -0.55);
+      bed.add(pan);
+      const cargo = {
+        trash: new THREE.Group(),
+        bricks: new THREE.Group(),
+        roof: new THREE.Group(),
+        pipes: new THREE.Group()
+      };
+      const blob1 = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 10), paint(0x8d97a3));
+      blob1.position.set(-0.2, 0.5, -0.55);
+      const blob2 = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), paint(0x6b7280));
+      blob2.position.set(0.16, 0.52, -0.35);
+      cargo.trash.add(blob1, blob2);
+      [[-0.28, 0.5, -0.7], [0.05, 0.5, -0.7], [0.28, 0.62, -0.35]].forEach(([x, y, z], i) => {
+        const brick = box(0.28, 0.16, 0.18, i === 2 ? 0xc47a3a : 0xe23b3b);
+        brick.position.set(x, y, z);
+        cargo.bricks.add(brick);
+      });
+      const miniRoof = box(0.7, 0.1, 0.45, 0xe23b3b);
+      miniRoof.rotation.x = 0.5;
+      miniRoof.position.set(0, 0.58, -0.45);
+      cargo.roof.add(miniRoof);
+      [-0.16, 0.16].forEach((x) => {
+        const pipe = cyl(0.08, 0.7, 0x3aa0c8, 10);
+        pipe.rotation.z = Math.PI / 2;
+        pipe.rotation.y = Math.PI / 2;
+        pipe.position.set(x, 0.52, -0.5);
+        cargo.pipes.add(pipe);
+      });
+      Object.values(cargo).forEach((group) => {
+        group.visible = false;
+        bed.add(group);
+      });
+      g.add(cab, hood, glass, head, bed);
+      g.userData = { role: "vehicle", id: "dump", wheels, head, bed, cargo };
+      return g;
+    }
+
+    function makeMixer() {
+      const g = new THREE.Group();
+      const wheels = [];
+      [[-0.42, -0.6], [0.42, -0.6], [-0.48, 0.25], [0.48, 0.25], [-0.48, 0.75], [0.48, 0.75]].forEach(([x, z]) => {
+        const axle = axleAt(x, 0.24, z, 0.24);
+        g.add(axle);
+        wheels.push(axle);
+      });
+      const frame = box(0.9, 0.16, 2.15, 0xe36b2c);
+      frame.position.set(0, 0.48, 0.1);
+      const cab = box(0.82, 0.5, 0.62, 0xf28c28);
+      cab.position.set(0, 0.78, -0.72);
+      const glass = box(0.5, 0.24, 0.06, 0xb9e6ff);
+      glass.position.set(0, 0.88, -1.02);
+      const head = box(0.16, 0.16, 0.16, 0xffe14a);
+      head.position.set(0.16, 0.86, -0.7);
+      head.visible = false;
+      const drumSpin = new THREE.Group();
+      drumSpin.position.set(0, 0.95, 0.35);
+      const drum = cyl(0.42, 1.15, 0xd5dbe3, 20);
+      drum.rotation.z = Math.PI / 2;
+      drumSpin.add(drum);
+      const stream = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.85, 8), paint(0xb7bcc4));
+      stream.position.set(0, 0.45, 1.05);
+      stream.visible = false;
+      g.add(frame, cab, glass, head, drumSpin, stream);
+      g.userData = { role: "vehicle", id: "mixer", wheels, head, drum: drumSpin, stream };
+      return g;
+    }
+
+    function makeRoller() {
+      const g = new THREE.Group();
+      const wheels = [];
+      const front = new THREE.Group();
+      const drum = cyl(0.62, 1.15, 0xd5dde6, 24);
+      drum.rotation.z = Math.PI / 2;
+      front.add(drum);
+      front.position.set(0, 0.62, -0.85);
+      wheels.push(front);
+      const rear = new THREE.Group();
+      const small = cyl(0.38, 0.95, 0xd5dde6, 20);
+      small.rotation.z = Math.PI / 2;
+      rear.add(small);
+      rear.position.set(0, 0.38, 0.85);
+      wheels.push(rear);
+      const frame = box(0.42, 0.16, 1.3, 0x5aa84a);
+      frame.position.set(0, 0.78, 0.05);
+      const cab = box(0.7, 0.48, 0.55, 0x8ed36a);
+      cab.position.set(0, 1.12, 0.15);
+      const glass = box(0.4, 0.2, 0.06, 0xb9e6ff);
+      glass.position.set(0, 1.18, -0.12);
+      const head = box(0.16, 0.16, 0.16, 0xffe14a);
+      head.position.set(0.1, 1.16, 0.15);
+      head.visible = false;
+      g.add(front, rear, frame, cab, glass, head);
+      g.userData = { role: "vehicle", id: "roller", wheels, head };
+      return g;
+    }
+
+    const makers = {
+      bulldozer: makeBulldozer,
+      excavator: makeExcavator,
+      crane: makeCrane,
+      dump: makeDump,
+      mixer: makeMixer,
+      roller: makeRoller
+    };
+
+    function russianVoice() {
+      const synth = window.speechSynthesis;
+      if (!synth) return null;
+      return synth.getVoices().find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("ru")) || null;
+    }
+    function speak(text, opts) {
+      const synth = window.speechSynthesis;
+      if (!synth || !text) return;
+      const say = () => {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "ru-RU";
+        utter.rate = opts && opts.rate ? opts.rate : 0.9;
+        utter.pitch = opts && opts.pitch ? opts.pitch : 1.08;
+        const ru = russianVoice();
+        if (ru) utter.voice = ru;
+        synth.resume();
+        synth.speak(utter);
+      };
+      try {
+        if (synth.speaking || synth.pending) {
+          synth.cancel();
+          setTimeout(say, 60);
+        } else say();
+      } catch (err) { /* вопрос остаётся на экране */ }
+    }
+    if (window.speechSynthesis) speechSynthesis.addEventListener("voiceschanged", () => {});
+    document.addEventListener("pointerdown", () => {
+      if (window.speechSynthesis) speechSynthesis.resume();
+    }, true);
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    function tween(ms, fn) {
+      return new Promise((resolve) => {
+        const t0 = performance.now();
+        const step = (now) => {
+          const t = Math.min(1, (now - t0) / ms);
+          const e = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+          fn(e, t);
+          if (t < 1) requestAnimationFrame(step);
+          else resolve();
+        };
+        requestAnimationFrame(step);
+      });
+    }
+    function angDiff(a, b) {
+      let d = b - a;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return d;
+    }
+    async function drive(v, x, z, ms) {
+      const from = v.position.clone();
+      const to = new THREE.Vector3(x, from.y, z);
+      const dir = to.clone().sub(from);
+      dir.y = 0;
+      v.userData.rolling = true;
+      if (dir.length() > 0.12) {
+        const yaw = Math.atan2(-dir.x, -dir.z);
+        const y0 = v.rotation.y;
+        const dy = angDiff(y0, yaw);
+        await tween(Math.min(320, ms * 0.35), (e) => { v.rotation.y = y0 + dy * e; });
+      }
+      await tween(ms, (e) => { v.position.lerpVectors(from, to, e); });
+      v.userData.rolling = false;
+    }
+    async function driveHome(v) {
+      const home = v.userData.home;
+      await drive(v, home.x, home.z, 800);
+      const y0 = v.rotation.y;
+      const dy = angDiff(y0, Math.PI);
+      await tween(220, (e) => { v.rotation.y = y0 + dy * e; });
+    }
+    async function embark(v) {
+      const start = builder.position.clone();
+      const end = new THREE.Vector3();
+      v.getWorldPosition(end);
+      end.y = 0;
+      await tween(480, (e) => {
+        builder.position.lerpVectors(start, end, e);
+        builder.position.y = Math.abs(Math.sin(e * Math.PI * 4)) * 0.08;
+      });
+      builder.visible = false;
+      if (v.userData.head) v.userData.head.visible = true;
+    }
+    async function disembark(v) {
+      if (v.userData.head) v.userData.head.visible = false;
+      const start = new THREE.Vector3();
+      v.getWorldPosition(start);
+      start.y = 0;
+      builder.position.copy(start);
+      builder.visible = true;
+      await tween(480, (e) => {
+        builder.position.lerpVectors(start, builderHome, e);
+        builder.position.y = Math.abs(Math.sin(e * Math.PI * 4)) * 0.08;
+      });
+    }
+
+    function createSite() {
+      if (site) {
+        scene.remove(site);
+        site.traverse((obj) => { if (obj.geometry) obj.geometry.dispose(); });
+      }
+      site = new THREE.Group();
+      scene.add(site);
+      const dirt = new THREE.Mesh(new THREE.BoxGeometry(11.5, 0.16, 8.2), paint(0xe4b86a));
+      dirt.position.set(0, 0.08, -0.4);
+      dirt.receiveShadow = true;
+      dirt.castShadow = false;
+      site.add(dirt);
+
+      const house = makeHouse(colors.wall, colors.roof, false);
+      house.position.set(0, 0.16, -1.7);
+      site.add(house);
+
+      const debris = new THREE.Group();
+      const bits = [
+        [ -2.4, 0.35, 0.2, 0.55, 0x9aa3ad ],
+        [ -0.8, 0.4, 1.1, 0.45, 0x3e9a32 ],
+        [ 0.6, 0.32, 0.15, 0.5, 0xc47a3a ],
+        [ 1.8, 0.38, 1.15, 0.48, 0x9aa3ad ],
+        [ 2.8, 0.34, 0.35, 0.42, 0x3e9a32 ]
+      ].map(([x, y, z, s, color]) => {
+        const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), paint(color));
+        mesh.position.set(x, y, z);
+        mesh.castShadow = true;
+        debris.add(mesh);
+        return mesh;
+      });
+      site.add(debris);
+      const trash = new THREE.Group();
+      [[0, 0.22, 0, 0.28, 0x8d97a3], [0.28, 0.26, 0.05, 0.32, 0x6b7280], [-0.05, 0.2, 0.28, 0.22, 0xc47a3a]].forEach(([x, y, z, r, color]) => {
+        const blob = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), paint(color));
+        blob.position.set(x, y, z);
+        blob.castShadow = true;
+        trash.add(blob);
+      });
+      trash.position.set(3.6, 0.16, 0.4);
+      trash.visible = false;
+      site.add(trash);
+
+      const trenchPivot = new THREE.Group();
+      trenchPivot.position.set(-3.3, 0.18, 1.55);
+      const trench = box(6.6, 0.18, 0.7, 0x8d6239);
+      trench.position.set(3.3, 0.02, 0);
+      trenchPivot.add(trench);
+      trenchPivot.scale.x = 0.001;
+      trenchPivot.visible = false;
+      site.add(trenchPivot);
+      const pipes = new THREE.Group();
+      [-0.7, 0.55, 1.8].forEach((x) => {
+        const pipe = cyl(0.1, 1.15, 0x3aa0c8, 12);
+        pipe.rotation.z = Math.PI / 2;
+        pipe.position.set(x, 0.28, 1.55);
+        pipes.add(pipe);
+      });
+      pipes.visible = false;
+      site.add(pipes);
+      const loosePipes = new THREE.Group();
+      [0, 0.28].forEach((z) => {
+        const pipe = cyl(0.1, 1.2, 0x3aa0c8, 12);
+        pipe.rotation.z = Math.PI / 2;
+        pipe.position.set(z, 0.16, 0);
+        loosePipes.add(pipe);
+      });
+      loosePipes.position.set(2.4, 0.2, 1.15);
+      loosePipes.visible = false;
+      site.add(loosePipes);
+
+      const roadPivot = new THREE.Group();
+      roadPivot.position.set(-3.8, 0.2, 2.55);
+      const asphalt = box(7.6, 0.08, 1.35, 0x5e6670);
+      asphalt.position.set(3.8, 0.04, 0);
+      for (let i = 0; i < 4; i++) {
+        const dash = box(0.45, 0.03, 0.12, 0xffffff);
+        dash.position.set(1.1 + i * 1.6, 0.09, 0);
+        asphalt.add(dash);
+      }
+      roadPivot.add(asphalt);
+      roadPivot.scale.x = 0.001;
+      roadPivot.visible = false;
+      site.add(roadPivot);
+
+      vehicles = ["bulldozer", "excavator", "crane", "dump", "mixer", "roller"].map((id) => makers[id]());
+      vehicles.forEach((v) => {
+        v.rotation.y = Math.PI;
+        site.add(v);
+      });
+      layoutVehicles();
+
+      builder = makeBuilder();
+      builder.position.copy(builderHome);
+      site.add(builder);
+
+      site.userData = { house, debris: bits, trash, trenchPivot, pipes, loosePipes, roadPivot };
+      return site;
+    }
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    function pick(event) {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const root = mode === "pick" ? pickGroup : site;
+      if (!root) return null;
+      const hits = raycaster.intersectObjects(root.children, true);
+      for (const hit of hits) {
+        let obj = hit.object;
+        while (obj) {
+          if (obj.userData && obj.userData.role) return obj;
+          obj = obj.parent;
+        }
+      }
+      return null;
+    }
+
+    function showBubble(obj) {
+      const point = new THREE.Vector3();
+      obj.getWorldPosition(point);
+      point.y += 2.6;
+      point.project(camera);
+      bubble.hidden = false;
+      bubble.style.left = ((point.x * 0.5 + 0.5) * canvas.clientWidth) + "px";
+      bubble.style.top = ((-point.y * 0.5 + 0.5) * canvas.clientHeight) + "px";
+    }
+    async function nope(v) {
+      const base = v.position.y;
+      showBubble(v);
+      speak("Я так не умею", { pitch: 0.72, rate: 0.95 });
+      await tween(560, (e, t) => {
+        v.position.y = base + Math.sin(t * Math.PI) * 0.38;
+        v.rotation.z = Math.sin(t * Math.PI * 2) * 0.06;
+      });
+      v.position.y = base;
+      v.rotation.z = 0;
+      bubble.hidden = true;
+    }
+
+    function setCargo(v, name) {
+      Object.entries(v.userData.cargo).forEach(([key, group]) => {
+        group.visible = key === name;
+      });
+    }
+    async function dumpBed(v, name, after) {
+      if (name) setCargo(v, name);
+      await tween(420, (e) => { v.userData.bed.rotation.x = 0.75 * e; });
+      setCargo(v, "");
+      await after();
+      await tween(320, (e) => { v.userData.bed.rotation.x = 0.75 * (1 - e); });
+    }
+
+    const ACTIONS = {
+      async clear(v) {
+        const bits = site.userData.debris;
+        await drive(v, -3.4, 0.7, 700);
+        const slides = bits.map((bit) => {
+          const start = bit.position.clone();
+          return tween(1100, (e) => {
+            bit.position.x = start.x + 5.5 * e;
+            bit.position.y = start.y + Math.sin(e * Math.PI) * 0.35;
+            bit.scale.setScalar(1 - 0.75 * e);
+          });
+        });
+        await drive(v, 3.5, 0.7, 1100);
+        await Promise.all(slides);
+        bits.forEach((bit) => { bit.visible = false; });
+        site.userData.trash.visible = true;
+      },
+      async haul(v) {
+        await drive(v, 3.3, 1.5, 800);
+        setCargo(v, "trash");
+        site.userData.trash.visible = false;
+        await wait(250);
+        await drive(v, -6.5, 3.2, 700);
+        setCargo(v, "");
+      },
+      async pour(v) {
+        const found = site.userData.house.userData.found;
+        await drive(v, -1.6, 0.9, 800);
+        v.userData.spinDrum = true;
+        v.userData.stream.visible = true;
+        found.visible = true;
+        found.scale.y = 0.02;
+        await tween(1100, (e) => { found.scale.y = 0.02 + 0.98 * e; });
+        v.userData.stream.visible = false;
+        v.userData.spinDrum = false;
+      },
+      async materials(v) {
+        const data = site.userData.house.userData;
+        await drive(v, 1.4, 0.8, 800);
+        await dumpBed(v, "bricks", async () => {
+          for (let i = 0; i < data.bricks.length; i++) {
+            const brick = data.bricks[i];
+            brick.visible = true;
+            tween(160, (e) => brick.scale.setScalar(0.2 + 0.8 * e));
+            if (i % 4 === 3) await wait(30);
+          }
+          await wait(180);
+          data.glass.visible = true;
+          data.door.visible = true;
+        });
+      },
+      async roofBring(v) {
+        await drive(v, 2.2, 1.6, 800);
+        await dumpBed(v, "roof", async () => {
+          site.userData.house.userData.roof.visible = true;
+          await wait(120);
+        });
+      },
+      async roofPlace(v) {
+        const roof = site.userData.house.userData.roof;
+        const seat = site.userData.house.userData.seat;
+        await drive(v, 1.1, 1.3, 800);
+        v.userData.boom.rotation.x = -0.25;
+        const from = roof.position.clone();
+        const rot = roof.rotation.clone();
+        await tween(1200, (e) => {
+          roof.position.lerpVectors(from, seat, e);
+          roof.position.y += Math.sin(e * Math.PI) * 1.5;
+          roof.rotation.x = rot.x * (1 - e);
+          roof.rotation.y = rot.y * (1 - e);
+          roof.rotation.z = rot.z * (1 - e);
+        });
+        roof.position.copy(seat);
+        roof.rotation.set(0, 0, 0);
+        v.userData.boom.rotation.x = 0;
+      },
+      async dig(v) {
+        await drive(v, -2.6, 2.2, 700);
+        v.userData.boom.rotation.x = 0.35;
+        v.userData.stick.rotation.x = 0.4;
+        site.userData.trenchPivot.visible = true;
+        site.userData.trenchPivot.scale.x = 0.001;
+        const grow = tween(1000, (e) => { site.userData.trenchPivot.scale.x = Math.max(0.001, e); });
+        await drive(v, 2.8, 2.2, 1000);
+        await grow;
+        v.userData.boom.rotation.x = 0;
+        v.userData.stick.rotation.x = 0;
+      },
+      async pipesBring(v) {
+        await drive(v, 2.2, 1.7, 800);
+        await dumpBed(v, "pipes", async () => {
+          site.userData.loosePipes.visible = true;
+          await wait(120);
+        });
+      },
+      async pipesLay(v) {
+        const loose = site.userData.loosePipes;
+        const pipes = site.userData.pipes;
+        await drive(v, 1.3, 2.0, 750);
+        v.userData.boom.rotation.x = -0.2;
+        const from = loose.position.clone();
+        await tween(1000, (e) => {
+          loose.position.lerpVectors(from, new THREE.Vector3(0.4, 0.35, 1.55), e);
+          loose.position.y += Math.sin(e * Math.PI) * 1.1;
+        });
+        loose.visible = false;
+        pipes.visible = true;
+        v.userData.boom.rotation.x = 0;
+      },
+      async pave(v) {
+        await drive(v, -3.5, 2.55, 600);
+        site.userData.roadPivot.visible = true;
+        const grow = tween(1200, (e) => { site.userData.roadPivot.scale.x = Math.max(0.001, e); });
+        await drive(v, 3.6, 2.55, 1200);
+        await grow;
+        site.userData.trenchPivot.visible = false;
+        site.userData.pipes.visible = false;
+      }
+    };
+
+    function ask() {
+      const stage = STAGES[stageIndex];
+      question.textContent = stage.prompt;
+      speak(stage.prompt);
+    }
+
+    const pickView = { pos: new THREE.Vector3(0, 4.6, 10.4), look: new THREE.Vector3(0, 0.9, 0) };
+    function playView() {
+      if (window.innerWidth < 820) return { pos: new THREE.Vector3(0, 9.4, 12.6), look: new THREE.Vector3(0, 0.35, 1.05) };
+      return { pos: new THREE.Vector3(1.5, 6.7, 14.2), look: new THREE.Vector3(0, 0.7, 0.45) };
+    }
+    async function flyTo(view) {
+      const fromPos = camera.position.clone();
+      const fromLook = look.clone();
+      await tween(700, (e) => {
+        camera.position.lerpVectors(fromPos, view.pos, e);
+        look.lerpVectors(fromLook, view.look, e);
+      });
+    }
+
+    async function choose(id) {
+      if (busy || mode !== "pick") return;
+      busy = true;
+      colors = HOUSES[id];
+      createSite();
+      pickGroup.visible = false;
+      pickUi.hidden = true;
+      playUi.hidden = false;
+      finale.hidden = true;
+      stageIndex = 0;
+      mode = "play";
+      await flyTo(playView());
+      busy = false;
+      ask();
+    }
+
+    async function onVehicle(id) {
+      if (busy || mode !== "play" || !finale.hidden) return;
+      const stage = STAGES[stageIndex];
+      const vehicle = vehicles.find((item) => item.userData.id === id);
+      if (!vehicle) return;
+      if (id !== stage.vehicle) {
+        busy = true;
+        await nope(vehicle);
+        busy = false;
+        return;
+      }
+      const gen = generation;
+      busy = true;
+      try {
+        await embark(vehicle);
+        if (gen !== generation) return;
+        await ACTIONS[stage.id](vehicle);
+        if (gen !== generation) return;
+        await driveHome(vehicle);
+        if (gen !== generation) return;
+        await disembark(vehicle);
+        if (gen !== generation) return;
+        speak("Молодец!");
+        await wait(900);
+        if (gen !== generation) return;
+        stageIndex += 1;
+        if (stageIndex >= STAGES.length) {
+          playUi.hidden = true;
+          finale.hidden = false;
+          speak("Дом готов!");
+          return;
+        }
+        ask();
+      } finally {
+        if (gen === generation) busy = false;
+      }
+    }
+
+    function backToPicker() {
+      generation += 1;
+      busy = false;
+      stageIndex = 0;
+      bubble.hidden = true;
+      finale.hidden = true;
+      playUi.hidden = true;
+      pickUi.hidden = false;
+      if (site) site.visible = false;
+      pickGroup.visible = true;
+      mode = "pick";
+      layoutPick();
+      builderHome = new THREE.Vector3(-5.35, 0, 2.7);
+    }
+
+    let down = null;
+    canvas.addEventListener("pointerdown", (event) => {
+      down = { x: event.clientX, y: event.clientY };
+    });
+    canvas.addEventListener("pointerup", (event) => {
+      if (!down) return;
+      const dx = event.clientX - down.x;
+      const dy = event.clientY - down.y;
+      down = null;
+      if (dx * dx + dy * dy > 144) return;
+      const hit = pick(event);
+      if (!hit) return;
+      if (hit.userData.role === "choice") choose(hit.userData.id);
+      else if (hit.userData.role === "vehicle") onVehicle(hit.userData.id);
+    });
+    document.getElementById("again").addEventListener("click", () => {
+      if (!finale.hidden) speak("Дом готов!");
+      else if (STAGES[stageIndex]) speak(STAGES[stageIndex].prompt);
+    });
+    document.getElementById("replay").addEventListener("click", backToPicker);
+
+    function dockSpot(index, narrow) {
+      if (narrow) return new THREE.Vector3((index % 3 - 1) * 1.7, 0, 3.25 + Math.floor(index / 3) * 1.75);
+      return new THREE.Vector3((index - 2.85) * 1.92, 0, 4.45);
+    }
+    function layoutVehicles() {
+      const narrow = window.innerWidth < 820;
+      vehicles.forEach((v, i) => {
+        const spot = dockSpot(i, narrow);
+        v.scale.setScalar(narrow ? 0.58 : 0.78);
+        if (!v.userData.home || v.position.distanceTo(v.userData.home) < 0.08) v.position.copy(spot);
+        v.userData.home = spot;
+      });
+      const nextHome = narrow ? new THREE.Vector3(-2.15, 0, 1.85) : new THREE.Vector3(-5.35, 0, 2.7);
+      if (builder && builder.position.distanceTo(builderHome) < 0.3) builder.position.copy(nextHome);
+      builderHome.copy(nextHome);
+    }
+    function layoutPick() {
+      const narrow = window.innerWidth < 820;
+      pickHouses.forEach((house, index) => {
+        house.scale.setScalar(narrow ? 0.42 : 0.72);
+        house.position.x = (index - 1) * (narrow ? 1.72 : 4.3);
+      });
+      const view = narrow
+        ? { pos: new THREE.Vector3(0, 4.4, 9.6), look: new THREE.Vector3(0, 0.72, 0) }
+        : pickView;
+      camera.position.copy(view.pos);
+      look.copy(view.look);
+    }
+    function resize() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      camera.aspect = w / h;
+      camera.fov = w < 820 ? 62 : 40;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+      if (mode === "pick") layoutPick();
+      else if (mode === "play" && vehicles.length) {
+        layoutVehicles();
+        const view = playView();
+        camera.position.copy(view.pos);
+        look.copy(view.look);
+      }
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const clock = new THREE.Clock();
+    function frame() {
+      requestAnimationFrame(frame);
+      const dt = Math.min(0.05, clock.getDelta());
+      const spin = performance.now() / 1000;
+      vehicles.forEach((v) => {
+        if (v.userData.rolling) v.userData.wheels.forEach((axle) => { axle.rotation.x -= dt * 10; });
+        if (v.userData.spinDrum && v.userData.drum) v.userData.drum.rotation.x += dt * 4;
+        if (v.userData.rolling && v.userData.blade) v.userData.blade.position.y = Math.sin(spin * 18) * 0.04;
+      });
+      camera.lookAt(look);
+      renderer.render(scene, camera);
+    }
+    frame();
+  </script>
+</body>
+</html>
