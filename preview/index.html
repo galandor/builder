@@ -808,92 +808,36 @@
     let run = 0;
     let spacer = null;
 
-    const CLIPS = {
-      "Какой дом построим?": "voice/pick.mp3",
-      "Как думаешь, какую машинку надо использовать, чтобы расчистить площадку?": "voice/clear.mp3",
-      "Какой машинкой увезём мусор?": "voice/haul.mp3",
-      "Кто привезёт бетон и зальёт фундамент?": "voice/pour.mp3",
-      "Какая машинка привезёт кирпичи, окна и двери?": "voice/materials.mp3",
-      "Кто привезёт крышу?": "voice/roof-bring.mp3",
-      "Какая машинка поставит крышу на дом?": "voice/roof-place.mp3",
-      "Кто выкопает траншею для труб?": "voice/dig.mp3",
-      "Кто привезёт трубы?": "voice/pipes-bring.mp3",
-      "Какая машинка положит трубы?": "voice/pipes-lay.mp3",
-      "Кто закатает дорожку асфальтом?": "voice/pave.mp3",
-      "Я так не умею": "voice/cannot.mp3",
-      "Молодец!": "voice/praise.mp3",
-      "Дом готов!": "voice/done.mp3"
-    };
-    const clipData = {};
-    const clipAudio = {};
-    let audioCtx = null;
-    let voiceNode = null;
-    let voiceToken = 0;
-
-    Object.keys(CLIPS).forEach((line) => {
-      clipData[CLIPS[line]] = fetch(CLIPS[line]).then((response) => {
-        if (!response.ok) throw new Error(line);
-        return response.arrayBuffer();
-      });
-    });
-
-    function audioContext() {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return null;
-      if (!audioCtx) audioCtx = new Ctx();
-      if (audioCtx.state !== "running") audioCtx.resume();
-      return audioCtx;
-    }
-
-    function playClip(buffer) {
-      const ctx = audioContext();
-      if (!ctx) return;
-      if (voiceNode) {
-        try { voiceNode.stop(); } catch (err) { /* уже закончилась */ }
-      }
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.start();
-      voiceNode = source;
-    }
-
-    function speakSynth(text, opts) {
+    function russianVoice() {
       const synth = window.speechSynthesis;
-      if (!synth || !text) return;
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "ru-RU";
-      utter.volume = 1;
-      utter.rate = opts && opts.rate ? opts.rate : 0.9;
-      utter.pitch = opts && opts.pitch ? opts.pitch : 1;
-      try {
-        synth.resume();
-        if (synth.speaking || synth.pending) synth.cancel();
-        synth.speak(utter);
-      } catch (err) { /* текст вопроса остаётся на экране */ }
+      if (!synth) return null;
+      const voices = synth.getVoices();
+      return voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("ru")) || null;
     }
 
     function speak(text, opts) {
-      if (!text) return;
-      const url = CLIPS[text];
-      const token = ++voiceToken;
-      const ctx = audioContext();
-      if (!url || !ctx || !clipData[url]) {
-        speakSynth(text, opts);
-        return;
+      const synth = window.speechSynthesis;
+      if (!synth || !text) return;
+      const say = () => {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "ru-RU";
+        utter.rate = opts && opts.rate ? opts.rate : 0.9;
+        utter.pitch = opts && opts.pitch ? opts.pitch : 1.08;
+        const ru = russianVoice();
+        if (ru) utter.voice = ru;
+        synth.resume();
+        synth.speak(utter);
+      };
+      try {
+        if (synth.speaking || synth.pending) {
+          synth.cancel();
+          setTimeout(say, 60);
+        } else {
+          say();
+        }
+      } catch (err) {
+        /* Озвучка необязательна: вопрос всё равно написан на экране. */
       }
-      const ready = clipAudio[url]
-        ? Promise.resolve(clipAudio[url])
-        : clipData[url].then((bytes) => ctx.decodeAudioData(bytes.slice(0))).then((buffer) => {
-          clipAudio[url] = buffer;
-          return buffer;
-        });
-      ready.then((buffer) => {
-        if (token !== voiceToken) return;
-        playClip(buffer);
-      }).catch(() => {
-        if (token === voiceToken) speakSynth(text, opts);
-      });
     }
 
     function clearMotion(el) {
@@ -1279,8 +1223,12 @@
     });
 
     document.addEventListener("pointerdown", () => {
-      audioContext();
+      const synth = window.speechSynthesis;
+      if (synth) synth.resume();
     }, true);
+    if (window.speechSynthesis) {
+      window.speechSynthesis.addEventListener("voiceschanged", () => {});
+    }
   </script>
 </body>
 </html>
