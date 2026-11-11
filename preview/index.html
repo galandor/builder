@@ -464,9 +464,9 @@
     .vehicle.digging-down .bucket { transform: rotate(28deg); }
     .stream { opacity: 0; }
     .vehicle.pouring .stream { opacity: 1; }
-    .vehicle.driving .wheel { animation: spin 0.42s linear infinite; }
-    .kind-bulldozer.driving .blade { animation: wiggle 0.28s ease-in-out infinite; }
-    .kind-roller.driving { animation: bob 0.22s ease-in-out infinite; }
+    .vehicle.driving .wheel { animation: spin 0.74s linear infinite; }
+    .kind-bulldozer.driving .blade { animation: wiggle 0.48s ease-in-out infinite; }
+    .kind-roller.driving { animation: bob 0.38s ease-in-out infinite; }
     @keyframes spin { to { transform: rotate(-360deg); } }
     @keyframes wiggle { 50% { transform: translateY(4px); } }
     @keyframes bob { 50% { transform: translateY(-3px); } }
@@ -982,6 +982,8 @@
     const pipesGround = document.getElementById("pipes-ground");
     const pipesIn = document.getElementById("pipes-in");
 
+    const DRIVE_SCALE = 1.75;
+    const travel = (ms) => Math.round(ms * DRIVE_SCALE);
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const frame = () => new Promise((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -1133,12 +1135,12 @@
 
     async function drive(el, leftPct, groundPct, ms) {
       if (!onSite) {
-        const approach = moveTo(el, 50, 100, 640);
-        await wait(240);
+        const approach = moveTo(el, 50, 100, travel(640));
+        await wait(travel(240));
         field.classList.add("gates-open");
         await approach;
-        await wait(260);
-        await moveTo(el, 50, 72, 500);
+        await wait(travel(260));
+        await moveTo(el, 50, 72, travel(500));
         onSite = true;
         field.classList.remove("gates-open");
         await wait(400);
@@ -1159,18 +1161,18 @@
     async function returnHome(el) {
       if (!spacer) return;
       if (onSite) {
-        const back = moveTo(el, 50, 72, 480);
-        await wait(160);
+        const back = moveTo(el, 50, 72, travel(480));
+        await wait(travel(160));
         field.classList.add("gates-open");
         await back;
-        await wait(220);
-        await moveTo(el, 50, 100, 460);
+        await wait(travel(220));
+        await moveTo(el, 50, 100, travel(460));
         delete el.dataset.cargo;
         onSite = false;
       }
       const playRect = play.getBoundingClientRect();
       const slot = spacer.getBoundingClientRect();
-      const ms = 800;
+      const ms = travel(800);
       pointForward(el, slot.left);
       el.style.transition = "left " + ms + "ms ease-in-out, top " + ms + "ms ease-in-out, width " + ms + "ms ease, height " + ms + "ms ease";
       el.style.width = slot.width + "px";
@@ -1207,21 +1209,21 @@
 
     const ACTIONS = {
       async clear(el) {
-        await drive(el, 14, 84, 650);
+        await drive(el, 14, 84, travel(650));
         field.classList.add("pushing");
-        await drive(el, 84, 84, 1300);
+        await drive(el, 84, 84, travel(1300));
         field.classList.add("has-trash");
         field.classList.remove("has-debris", "pushing");
         await wait(280);
       },
       async haul(el) {
-        await drive(el, 74, 82, 900);
+        await drive(el, 74, 82, travel(900));
         el.dataset.cargo = "trash";
         field.classList.remove("has-trash");
         await wait(450);
       },
       async pour(el) {
-        await drive(el, 24, 78, 900);
+        await drive(el, 24, 78, travel(900));
         el.classList.add("pouring");
         field.classList.add("pouring", "has-foundation");
         await wait(1200);
@@ -1230,7 +1232,7 @@
       },
       async materials(el) {
         el.dataset.cargo = "bricks";
-        await drive(el, 76, 80, 900);
+        await drive(el, 76, 80, travel(900));
         await dumpBed(el, "bricks", async () => {
           field.classList.add("has-walls");
           await wait(1050);
@@ -1239,14 +1241,14 @@
       },
       async roofBring(el) {
         el.dataset.cargo = "roof";
-        await drive(el, 78, 80, 900);
+        await drive(el, 78, 80, travel(900));
         await dumpBed(el, "roof", async () => {
           field.classList.add("has-roof-ground");
           await wait(200);
         });
       },
       async roofPlace(el) {
-        await drive(el, 56, 80, 900);
+        await drive(el, 56, 80, travel(900));
         el.classList.add("lifting");
         await wait(360);
         await fly(roofGround, roofTarget);
@@ -1257,22 +1259,22 @@
       },
       async dig(el) {
         el.classList.add("digging");
-        await drive(el, 22, 86, 650);
+        await drive(el, 22, 86, travel(650));
         el.classList.add("digging-down");
         field.classList.add("has-trench");
-        await drive(el, 72, 86, 1100);
+        await drive(el, 72, 86, travel(1100));
         el.classList.remove("digging", "digging-down");
       },
       async pipesBring(el) {
         el.dataset.cargo = "pipes";
-        await drive(el, 72, 84, 900);
+        await drive(el, 72, 84, travel(900));
         await dumpBed(el, "pipes", async () => {
           field.classList.add("has-pipes-ground");
           await wait(200);
         });
       },
       async pipesLay(el) {
-        await drive(el, 50, 82, 900);
+        await drive(el, 50, 82, travel(900));
         el.classList.add("lifting");
         await wait(300);
         await fly(pipesGround, pipesIn);
@@ -1285,9 +1287,9 @@
         const fieldRect = field.getBoundingClientRect();
         const roadRect = document.getElementById("asphalt").getBoundingClientRect();
         const groundPct = ((roadRect.top + roadRect.height * 0.72) - fieldRect.top) / fieldRect.height * 100;
-        await drive(el, 24, groundPct, 650);
+        await drive(el, 24, groundPct, travel(650));
         field.classList.add("has-asphalt");
-        await drive(el, 76, groundPct, 1300);
+        await drive(el, 76, groundPct, travel(1300));
       }
     };
 
